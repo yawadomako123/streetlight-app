@@ -28,22 +28,20 @@ export class ClassicTransport implements BtTransport {
       );
     }
 
-    // Runtime permissions. Android 12+ needs BLUETOOTH_CONNECT/SCAN;
-    // older versions need location for discovery of paired devices.
-    const perms: string[] = [];
+    // Runtime permissions: request both Bluetooth and Location. On many Android devices,
+    // Bluetooth Classic connections fail silently if GPS/Location permission is missing.
+    const perms: string[] = [PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION];
     if (Number(Platform.Version) >= 31) {
       perms.push(
         PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
         PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
       );
-    } else {
-      perms.push(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
     }
     const granted = await PermissionsAndroid.requestMultiple(perms as any);
     const denied = Object.values(granted).some(
       (v) => v !== PermissionsAndroid.RESULTS.GRANTED,
     );
-    if (denied) throw new Error('Bluetooth permission was denied.');
+    if (denied) throw new Error('Required Bluetooth/Location permissions were denied.');
 
     const enabled = await RNBluetoothClassic.isBluetoothEnabled();
     if (!enabled) {
@@ -67,16 +65,15 @@ export class ClassicTransport implements BtTransport {
       /* not discovering — fine */
     }
 
-    // If a previous attempt left a half-open socket, the HC-05's single RFCOMM
-    // slot stays busy and every new connect fails with "read ret: -1". Close it.
+    // Force close any stale/leaked socket at the native Java layer.
+    // If the socket was leaked in a previous run, calling disconnect directly
+    // clears the channel so the subsequent connect succeeds.
     try {
-      if (await RNBluetoothClassic.isDeviceConnected(deviceId)) {
-        console.log('[Bluetooth] Stale connection found — closing it before reconnecting.');
-        await RNBluetoothClassic.disconnectFromDevice(deviceId);
-        await delay(700);
-      }
+      console.log('[Bluetooth] Cleaning up stale sockets...');
+      await RNBluetoothClassic.disconnectFromDevice(deviceId);
+      await delay(1000);
     } catch {
-      /* nothing to close */
+      /* nothing to close — safe to continue */
     }
 
     const bonded = await RNBluetoothClassic.getBondedDevices();
@@ -98,16 +95,22 @@ export class ClassicTransport implements BtTransport {
     //
     // HC-05/06 accept an insecure socket, and the library already retries
     // internally via its reflection channel-1 fallback, so one call is enough.
-    console.log('[Bluetooth] ▶ BUILD v4 · SINGLE INSECURE RFCOMM attempt (no secure attempt) ◀');
+    console.log('[Bluetooth] ▶ Attempting default secure connection... ◀');
     let ok = false;
     try {
-      ok = await device.connect({ delimiter: '\n', secureSocket: false } as any);
+      ok = await device.connect();
     } catch (err: any) {
-      throw new Error(
-        `HC-05 socket failed (${err?.message ?? err}). If it keeps failing, the ` +
-          'module is likely brown-out resetting — give it stable power and make ' +
-          'sure it is not already connected to another app/phone.',
-      );
+      console.log(`[Bluetooth] Secure connection failed (${err?.message ?? err}). Retrying with insecure RFCOMM socket...`);
+      // Small delay to let the Android BT stack clear the socket
+      await delay(1000);
+      try {
+        ok = await device.connect({ delimiter: '\n', secureSocket: false } as any);
+      } catch (insecureErr: any) {
+        throw new Error(
+          `Bluetooth connection failed on both secure and insecure sockets: ${insecureErr?.message ?? insecureErr}. ` +
+          `Verify the HC-05 is not connected to another app and power-cycle your phone's Bluetooth.`
+        );
+      }
     }
     if (!ok) throw new Error('connect() returned false');
     this.device = device;
