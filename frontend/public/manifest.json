@@ -1,0 +1,21 @@
+{
+  "short_name": "ISLC Admin",
+  "name": "Intelligent Street Lighting Admin",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#0B1530",
+  "theme_color": "#0B1530",
+  "display": "standalone",
+  "orientation": "portrait"
+}

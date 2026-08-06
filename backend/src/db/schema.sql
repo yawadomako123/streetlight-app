@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS devices (
   name                VARCHAR(100) NOT NULL,
   status              VARCHAR(20) DEFAULT 'offline', -- 'online' or 'offline'
   current_brightness  INTEGER DEFAULT 0,
+  light_level         INTEGER DEFAULT 0,       -- raw LDR reading (0-1023)
   motion_detected     BOOLEAN DEFAULT FALSE,
   manual_override     BOOLEAN DEFAULT FALSE,
   last_seen           TIMESTAMPTZ DEFAULT NOW()

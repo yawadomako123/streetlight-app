@@ -1,0 +1,52 @@
+{
+  "expo": {
+    "name": "ISLC Controller",
+    "slug": "islc-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "islc",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0B1530",
+    "newArchEnabled": false,
+    "splash": {
+      "backgroundColor": "#0B1530",
+      "resizeMode": "contain"
+    },
+    "android": {
+      "package": "com.islc.controller",
+      "permissions": [
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.islc.controller",
+      "infoPlist": {
+        "NSBluetoothAlwaysUsageDescription": "This app connects to the street light controller over Bluetooth.",
+        "NSBluetoothPeripheralUsageDescription": "This app connects to the street light controller over Bluetooth."
+      }
+    },
+    "plugins": [
+      "expo-dev-client",
+      "expo-asset",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "kotlinVersion": "1.9.25"
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "47d4b9c3-c29b-4c39-bc8f-65c58d1ca0bc"
+      }
+    },
+    "owner": "evan_dc0"
+  }
+}
