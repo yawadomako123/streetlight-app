@@ -4,7 +4,21 @@ import pool from '../db/pool.js';
 export const getDevices = async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM devices ORDER BY name ASC');
-    res.json(result.rows);
+
+    // A device is "online" only if it has reported recently. Telemetry sets
+    // status='online' but nothing sets it back, so we derive it from last_seen:
+    // if no reading has arrived in OFFLINE_AFTER_MS, treat it as offline.
+    const OFFLINE_AFTER_MS = 15000; // 15s (ESP32 posts ~2×/sec)
+    const now = Date.now();
+    const devices = result.rows.map((d) => ({
+      ...d,
+      status:
+        d.last_seen && now - new Date(d.last_seen).getTime() < OFFLINE_AFTER_MS
+          ? 'online'
+          : 'offline',
+    }));
+
+    res.json(devices);
   } catch (error) {
     console.error('Error fetching devices:', error);
     res.status(500).json({ error: 'Failed to fetch devices' });
