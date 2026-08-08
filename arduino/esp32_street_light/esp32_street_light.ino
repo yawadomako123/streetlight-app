@@ -4,7 +4,7 @@
 #include <ArduinoJson.h>
 
 const char* WIFI_SSID = "Evan";
-const char* WIFI_PASSWORD = "evan1234567890";
+const char* WIFI_PASSWORD = "evan1234567890a";
 
 const char* BACKEND = "https://streetlight-app.onrender.com";
 const char* DEVICE_ID = "arduino-uno";
@@ -14,14 +14,19 @@ const int ECHO_PIN = 18;
 const int LDR_PIN = 34;
 const int LED_PIN = 23;
 
-const int DEFAULT_LDR_THRESHOLD = 150;
-const int PRESENCE_THRESHOLD_CM = 20;
+const int LDR_NIGHT_ENTER = 120;
+const int LDR_DAY_EXIT = 180;
+
+const int PRESENCE_ENTER_CM = 20;
+const int PRESENCE_EXIT_CM = 30;
+
 const int BRIGHT_FULL = 255;
 const int BRIGHT_BASELINE = 50;
 const int BRIGHT_OFF = 0;
 
 const unsigned long TELEMETRY_MS = 500;
 const unsigned long SYNC_MS = 2500;
+const unsigned long WIFI_RETRY_MS = 10000;
 const unsigned long MOTION_HOLD_MS = 1000;
 
 volatile int latestLdr = 0;
@@ -32,11 +37,12 @@ volatile int latestBrightness = 0;
 volatile bool g_manualOverride = false;
 volatile int g_targetBrightness = 0;
 volatile bool g_scheduleActive = true;
-volatile int g_ldrThreshold = DEFAULT_LDR_THRESHOLD;
+volatile int g_ldrThreshold = 150;
 volatile int g_autoDimMinutes = 0;
 
-unsigned long lastMotionMs = 0;
-bool motionSeen = false;
+bool motionDetected = false;
+bool nightMode = false;
+
 int currentBrightness = BRIGHT_OFF;
 
 WiFiClientSecure secureClient;
@@ -61,36 +67,57 @@ int measureDistance() {
 
 void setLed(int target) {
   target = constrain(target, 0, 255);
-  currentBrightness = target;
-  analogWrite(LED_PIN, currentBrightness);
-  latestBrightness = currentBrightness;
-}
 
-void ensureWifi() {
-  if (WiFi.status() == WL_CONNECTED) {
+  if (currentBrightness == target) {
     return;
   }
 
-  Serial.print("WiFi connecting to ");
-  Serial.print(WIFI_SSID);
+  currentBrightness = target;
+
+  analogWrite(LED_PIN, currentBrightness);
+
+  latestBrightness = currentBrightness;
+
+  Serial.print("LED -> ");
+  Serial.println(currentBrightness);
+}
+
+bool connectWifi() {
+  if (WiFi.status() == WL_CONNECTED) {
+    return true;
+  }
+
+  Serial.println();
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(WIFI_SSID);
 
   WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   unsigned long start = millis();
 
-  while (WiFi.status() != WL_CONNECTED &&
-         millis() - start < 15000) {
-    delay(100);
+  while (
+    WiFi.status() != WL_CONNECTED &&
+    millis() - start < 15000
+  ) {
+    delay(500);
     Serial.print(".");
   }
 
+  Serial.println();
+
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.print(" connected. IP: ");
+    Serial.println("WiFi connected!");
+    Serial.print("ESP32 IP: ");
     Serial.println(WiFi.localIP());
-  } else {
-    Serial.println(" FAILED (will retry).");
+    return true;
   }
+
+  Serial.print("WiFi failed. Status: ");
+  Serial.println(WiFi.status());
+
+  return false;
 }
 
 void sendTelemetry() {
@@ -114,8 +141,7 @@ void sendTelemetry() {
 
   HTTPClient http;
 
-  String url =
-    String(BACKEND) + "/api/devices/telemetry";
+  String url = String(BACKEND) + "/api/devices/telemetry";
 
   http.begin(secureClient, url);
   http.addHeader("Content-Type", "application/json");
@@ -193,9 +219,6 @@ void pullConfig() {
   if (!dev["ldr_threshold"].isNull()) {
     g_ldrThreshold =
       dev["ldr_threshold"].as<int>();
-  } else {
-    g_ldrThreshold =
-      DEFAULT_LDR_THRESHOLD;
   }
 
   if (!dev["auto_dim_delay"].isNull()) {
@@ -209,27 +232,35 @@ void pullConfig() {
 void networkTask(void* parameter) {
   unsigned long lastTelemetry = 0;
   unsigned long lastSync = 0;
-
-  ensureWifi();
+  unsigned long lastWifiAttempt = 0;
 
   while (true) {
     unsigned long now = millis();
 
     if (WiFi.status() != WL_CONNECTED) {
-      ensureWifi();
+
+      if (
+        lastWifiAttempt == 0 ||
+        now - lastWifiAttempt >= WIFI_RETRY_MS
+      ) {
+        lastWifiAttempt = now;
+        connectWifi();
+      }
+
+    } else {
+
+      if (now - lastSync >= SYNC_MS) {
+        lastSync = now;
+        pullConfig();
+      }
+
+      if (now - lastTelemetry >= TELEMETRY_MS) {
+        lastTelemetry = now;
+        sendTelemetry();
+      }
     }
 
-    if (now - lastSync >= SYNC_MS) {
-      lastSync = now;
-      pullConfig();
-    }
-
-    if (now - lastTelemetry >= TELEMETRY_MS) {
-      lastTelemetry = now;
-      sendTelemetry();
-    }
-
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(50));
   }
 }
 
@@ -244,7 +275,8 @@ void setup() {
 
   secureClient.setInsecure();
 
-  // Networking on core 0. 16 KB stack — the HTTPS/TLS handshake needs the room.
+  analogWrite(LED_PIN, BRIGHT_OFF);
+
   xTaskCreatePinnedToCore(
     networkTask,
     "NetworkTask",
@@ -262,20 +294,29 @@ void loop() {
   unsigned long now = millis();
 
   int ldr = analogRead(LDR_PIN);
+
   int distance = measureDistance();
 
-  bool motionNow =
-    distance <= PRESENCE_THRESHOLD_CM &&
-    distance > 0;
-
-  if (motionNow) {
-    lastMotionMs = now;
-    motionSeen = true;
+  if (!nightMode && ldr <= LDR_NIGHT_ENTER) {
+    nightMode = true;
+    Serial.println("NIGHT MODE");
   }
 
-  bool motionActive =
-    motionSeen &&
-    (now - lastMotionMs < MOTION_HOLD_MS);
+  if (nightMode && ldr >= LDR_DAY_EXIT) {
+    nightMode = false;
+    Serial.println("DAY MODE");
+  }
+
+  if (
+    distance > 0 &&
+    distance <= PRESENCE_ENTER_CM
+  ) {
+    motionDetected = true;
+  }
+
+  if (distance >= PRESENCE_EXIT_CM) {
+    motionDetected = false;
+  }
 
   int targetBrightness = BRIGHT_OFF;
 
@@ -289,55 +330,32 @@ void loop() {
     targetBrightness =
       BRIGHT_OFF;
 
+  } else if (!nightMode) {
+
+    targetBrightness =
+      BRIGHT_OFF;
+
+  } else if (motionDetected) {
+
+    targetBrightness =
+      BRIGHT_FULL;
+
+  } else if (g_autoDimMinutes > 0) {
+
+    targetBrightness =
+      BRIGHT_BASELINE;
+
   } else {
 
-    bool isNight =
-      ldr <= g_ldrThreshold;
-
-    if (!isNight) {
-
-      targetBrightness =
-        BRIGHT_OFF;
-
-    } else if (motionActive) {
-
-      targetBrightness =
-        BRIGHT_FULL;
-
-    } else if (g_autoDimMinutes > 0) {
-
-      unsigned long sinceMotion =
-        now - lastMotionMs;
-
-      unsigned long dimTime =
-        (unsigned long)g_autoDimMinutes *
-        60UL *
-        1000UL;
-
-      if (!motionSeen ||
-          sinceMotion < dimTime) {
-
-        targetBrightness =
-          BRIGHT_BASELINE;
-
-      } else {
-
-        targetBrightness =
-          BRIGHT_OFF;
-      }
-
-    } else {
-
-      targetBrightness =
-        BRIGHT_BASELINE;
-    }
+    targetBrightness =
+      BRIGHT_BASELINE;
   }
 
   setLed(targetBrightness);
 
   latestLdr = ldr;
   latestDistance = distance;
-  latestMotion = motionActive;
+  latestMotion = motionDetected;
 
   delay(20);
 }
