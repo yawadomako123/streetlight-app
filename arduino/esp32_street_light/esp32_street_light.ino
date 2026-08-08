@@ -1,39 +1,6 @@
-/*
- * Street Light Controller — ESP32 WiFi edition
- * ------------------------------------------------------------------
- * The ESP32 has WiFi built in, so it replaces the whole
- *   Arduino Uno + HC-05 + usb-bridge.js
- * chain. It reads the sensors, drives the LED, and talks DIRECTLY to
- * the existing Express backend over HTTP — exactly the endpoints the
- * USB bridge used:
- *
- *   POST http://<backend>/api/devices/telemetry   (send readings)
- *   GET  http://<backend>/api/devices/sync/<id>    (pull automation config)
- *
- * Nothing on the backend or web dashboard changes. The phone app just
- * reads the same data from the backend.
- *
- * ── LIBRARIES (Arduino IDE → Boards Manager + Library Manager) ───────
- *   • Boards: "esp32 by Espressif Systems" (adds the ESP32 board core)
- *   • Library: "ArduinoJson" by Benoit Blanchon (v6 or v7)
- *
- * ── WIRING (ESP32 is 3.3V logic — mind the HC-SR04!) ─────────────────
- *   LDR:        3.3V ── LDR ──┬── GPIO34 (ADC, input-only)
- *                             └── 10kΩ ── GND
- *   HC-SR04:    VCC → 5V (VIN),  GND → GND
- *               Trig → GPIO5
- *               Echo → GPIO18  THROUGH a divider (Echo is 5V!):
- *                   Echo ──[1kΩ]──┬──[2kΩ]── GND
- *                                 └── GPIO18   (drops 5V → ~3.3V)
- *   LED:        GPIO23 ──[220Ω]── LED(+) ,  LED(−) → GND
- *
- * NOTE: GPIO34 is input-only and on ADC1 (works with WiFi on). Do NOT
- * use ADC2 pins (e.g. GPIO4/GPIO2/GPIO15) for the LDR — ADC2 is unusable
- * while WiFi is active.
- */
-
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 
 // ─── CONFIGURE THESE ─────────────────────────────────────────────────────────
@@ -43,7 +10,7 @@ const char* WIFI_PASSWORD = "evan1234567890a";
 // Base URL of your backend. Must be reachable from the ESP32:
 //   • Backend on your PC → use the PC's LAN IP (same WiFi), e.g. http://172.20.10.3:4000
 //   • Backend deployed   → use its public URL, e.g. https://your-app.onrender.com
-const char* BACKEND = "http://172.20.10.3:4000";
+const char* BACKEND = "https://streetlight-app.onrender.com";
 
 // Device id — keep "arduino-uno" so it lands on the existing device row /
 // dashboard / app config without any other change. Rename if you prefer.
@@ -81,6 +48,17 @@ int           currentBrightness = BRIGHT_OFF;
 
 unsigned long lastTelemetryMs = 0;
 unsigned long lastSyncMs      = 0;
+
+// HTTP transport. Render is HTTPS, so requests go through a secure client with
+// certificate validation disabled (simplest for a student project). A plain
+// http:// URL (e.g. a local backend) falls back to the non-secure client.
+WiFiClientSecure secureClient;
+WiFiClient       plainClient;
+
+void beginRequest(HTTPClient& http, const String& url) {
+  if (url.startsWith("https")) http.begin(secureClient, url);
+  else                          http.begin(plainClient, url);
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 int measureDistance() {
@@ -133,7 +111,7 @@ void sendTelemetry(int ldr, bool motion, int led) {
   serializeJson(doc, body);
 
   HTTPClient http;
-  http.begin(String(BACKEND) + "/api/devices/telemetry");
+  beginRequest(http, String(BACKEND) + "/api/devices/telemetry");
   http.addHeader("Content-Type", "application/json");
   int code = http.POST(body);
   if (code == 200) {
@@ -149,7 +127,7 @@ void pullConfig() {
   if (WiFi.status() != WL_CONNECTED) return;
 
   HTTPClient http;
-  http.begin(String(BACKEND) + "/api/devices/sync/" + DEVICE_ID);
+  beginRequest(http, String(BACKEND) + "/api/devices/sync/" + DEVICE_ID);
   int code = http.GET();
   if (code != 200) {
     http.end();
@@ -190,6 +168,9 @@ void setup() {
   // Match the Uno's 0–1023 LDR range so all thresholds stay compatible
   // (ESP32 ADC is 12-bit / 0–4095 by default).
   analogReadResolution(10);
+
+  // Talk to Render over HTTPS without bundling a CA certificate.
+  secureClient.setInsecure();
 
   ensureWifi();
   Serial.println("ESP32 Street Light Controller ready.");
