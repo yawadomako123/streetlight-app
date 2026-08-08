@@ -14,7 +14,7 @@ import { bridge } from '../bluetooth/BridgeService';
 import type { BtDevice } from '../bluetooth';
 import { useBridge } from '../hooks/useBridge';
 import type { RootStackParamList } from '../../App';
-import { USE_MOCK_BT } from '../config';
+import { USE_MOCK_BT, CONNECTION_MODE } from '../config';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Connect'>;
 
@@ -52,9 +52,10 @@ export function ConnectScreen({ navigation }: Props) {
     }
   }, []);
 
-  // Auto-scan if user reaches the connect screen
+  // Auto-scan if user reaches the connect screen (Bluetooth mode only —
+  // backend/WiFi mode has nothing to scan and shouldn't prompt for BT permission).
   useEffect(() => {
-    if (onboardingStep === 3) {
+    if (onboardingStep === 3 && CONNECTION_MODE === 'bluetooth') {
       scan();
     }
   }, [onboardingStep, scan]);
@@ -74,6 +75,20 @@ export function ConnectScreen({ navigation }: Props) {
     },
     [navigation],
   );
+
+  // Backend/WiFi mode (ESP32): no device to scan — just start reading from the backend.
+  const connectBackend = useCallback(async () => {
+    setError(null);
+    setConnectingId('backend');
+    try {
+      await bridge.connectBackend();
+      navigation.navigate('Dashboard');
+    } catch (e: any) {
+      setError(e?.message ?? String(e));
+    } finally {
+      setConnectingId(null);
+    }
+  }, [navigation]);
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
@@ -199,11 +214,39 @@ export function ConnectScreen({ navigation }: Props) {
             </View>
             <View>
               <Text style={styles.connectTitle}>StreetLight <Text style={{ color: colors.amber }}>AI</Text></Text>
-              <Text style={styles.connectSubtitle}>Connect over Bluetooth</Text>
+              <Text style={styles.connectSubtitle}>
+                {CONNECTION_MODE === 'backend' ? 'Connect over WiFi' : 'Connect over Bluetooth'}
+              </Text>
             </View>
           </View>
 
-          {/* Device List Card */}
+          {/* WiFi / Backend connect (ESP32) */}
+          {CONNECTION_MODE === 'backend' && (
+            <View style={styles.glassCard}>
+              <View style={styles.cardHeader}>
+                <Text style={styles.cardTitle}>Connect over WiFi</Text>
+                <Text style={styles.cardSub}>ESP32 · Backend</Text>
+              </View>
+              <Text style={styles.emptyText}>
+                Your ESP32 sends readings to the backend over WiFi. Make sure the backend is
+                running and this phone can reach it, then connect.
+              </Text>
+              <Pressable
+                onPress={connectBackend}
+                disabled={connectingId !== null}
+                style={({ pressed }) => [styles.scanBtn, pressed && { opacity: 0.8 }]}
+              >
+                {connectingId === 'backend' ? (
+                  <ActivityIndicator color="#0B1530" />
+                ) : (
+                  <Text style={styles.scanBtnText}>Connect to system</Text>
+                )}
+              </Pressable>
+            </View>
+          )}
+
+          {/* Device List Card (Bluetooth mode) */}
+          {CONNECTION_MODE === 'bluetooth' && (
           <View style={styles.glassCard}>
             <View style={styles.cardHeader}>
               <Text style={styles.cardTitle}>Paired devices</Text>
@@ -251,6 +294,7 @@ export function ConnectScreen({ navigation }: Props) {
               )}
             </Pressable>
           </View>
+          )}
 
           {error && (
             <View style={[styles.glassCard, { borderColor: colors.red + '55' }]}>

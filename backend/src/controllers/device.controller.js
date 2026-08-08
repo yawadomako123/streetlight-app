@@ -19,22 +19,15 @@ export const postTelemetry = async (req, res) => {
     return res.status(400).json({ error: 'deviceId is required' });
   }
 
+  const t0 = Date.now();
   try {
-    // 1. Log the reading into device_logs for stats
-    await pool.query(
-      `INSERT INTO device_logs (light_level, motion_detected, led_brightness, baseline_brightness)
-       VALUES ($1, $2, $3, $4)`,
-      [lightLevel, motionDetected, ledBrightness, baselineBrightness || 255]
-    );
-
-    // 2. Update the device's current state in the devices table
-    // If it's a new device, we insert it automatically.
-    // NOTE: We use COALESCE on the config columns so telemetry never overwrites
-    // the automation settings that were set from the dashboard.
+    // 1. Update the device's live state — this is the ONLY write the dashboard
+    // reads, so it's the only one we wait on before responding. New devices are
+    // inserted automatically on first contact.
     await pool.query(
       `INSERT INTO devices (id, name, status, current_brightness, light_level, motion_detected, last_seen)
        VALUES ($1, $2, 'online', $3, $4, $5, NOW())
-       ON CONFLICT (id) DO UPDATE 
+       ON CONFLICT (id) DO UPDATE
        SET status = 'online',
            current_brightness = EXCLUDED.current_brightness,
            light_level = EXCLUDED.light_level,
@@ -42,11 +35,26 @@ export const postTelemetry = async (req, res) => {
            last_seen = NOW()`,
       [deviceId, `Hardware Node (${deviceId})`, ledBrightness || 0, lightLevel || 0, motionDetected || false]
     );
+    const dbMs = Date.now() - t0;
 
+    // Respond to the hardware immediately — don't make it wait on the history log.
     res.json({ success: true });
+
+    // 2. Append to device_logs for historical stats — FIRE-AND-FORGET.
+    // It only feeds the charts, so it must never delay the live update.
+    pool.query(
+      `INSERT INTO device_logs (light_level, motion_detected, led_brightness, baseline_brightness)
+       VALUES ($1, $2, $3, $4)`,
+      [lightLevel, motionDetected, ledBrightness, baselineBrightness || 255]
+    ).catch(err => console.error('device_logs insert failed:', err.message));
+
+    console.log(
+      `📥 ${new Date().toLocaleTimeString()}  telemetry ${deviceId}  ` +
+      `ldr:${lightLevel} motion:${motionDetected ? 1 : 0} led:${ledBrightness}  | db ${dbMs}ms`
+    );
   } catch (error) {
     console.error('Error posting telemetry:', error);
-    res.status(500).json({ error: 'Failed to process telemetry' });
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to process telemetry' });
   }
 };
 

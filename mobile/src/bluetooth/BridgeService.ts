@@ -41,6 +41,7 @@ export class BridgeService {
   private transport: BtTransport = createTransport();
   private unsubLine: (() => void) | null = null;
   private unsubDisc: (() => void) | null = null;
+  private backendTimer: ReturnType<typeof setInterval> | null = null;
   private listeners = new Set<(s: BridgeSnapshot) => void>();
 
   private snap: BridgeSnapshot = {
@@ -116,10 +117,74 @@ export class BridgeService {
   }
 
   async disconnect(): Promise<void> {
+    if (this.backendTimer) {
+      clearInterval(this.backendTimer);
+      this.backendTimer = null;
+    }
     this.teardownSubs();
-    await this.transport.disconnect();
+    try {
+      await this.transport.disconnect();
+    } catch {
+      /* transport may never have been opened in backend mode */
+    }
     this.set({ connection: 'disconnected', deviceName: null });
     this.log('info', 'Disconnected');
+  }
+
+  // ── Backend (WiFi) mode ──────────────────────────────────────────────────────
+  // Used with the ESP32, which posts straight to the backend. Instead of a
+  // Bluetooth link, the app polls GET /api/devices and maps the device row into
+  // the SAME snapshot the UI already reads — so no screen logic has to change.
+  async connectBackend(): Promise<void> {
+    if (this.snap.connection === 'connecting' || this.snap.connection === 'connected') {
+      this.log('info', `Connect ignored — already ${this.snap.connection}`);
+      return;
+    }
+
+    this.set({
+      connection: 'connecting',
+      error: null,
+      deviceName: `Backend · ${DEVICE_ID}`,
+      transportKind: 'WiFi / Backend',
+    });
+
+    try {
+      await this.pollBackendOnce(); // confirm the backend is reachable
+      this.backendTimer = setInterval(() => {
+        void this.pollBackendOnce();
+      }, 1000);
+      this.set({ connection: 'connected' });
+      this.log('info', `Reading "${DEVICE_ID}" from backend over WiFi`);
+    } catch (e: any) {
+      this.set({ connection: 'error', error: `Backend unreachable: ${e?.message ?? e}` });
+      this.log('error', `Backend connect failed: ${e?.message ?? e}`);
+      throw e;
+    }
+  }
+
+  private async pollBackendOnce(): Promise<void> {
+    const devices = await api.getDevices();
+    const d = devices.find((x) => x.id === DEVICE_ID) ?? devices[0];
+    if (!d) {
+      // Backend reachable but no device has reported yet.
+      this.set({ relayOk: true });
+      return;
+    }
+
+    const latest: Telemetry = {
+      lightLevel: d.light_level ?? 0,
+      motionDetected: !!d.motion_detected,
+      ledBrightness: d.current_brightness ?? 0,
+      at: Date.now(),
+    };
+    const config: SyncConfig = {
+      manual_override: d.manual_override ?? false,
+      target_brightness: d.target_brightness ?? null,
+      schedule_active: true,
+      ldr_threshold: d.ldr_threshold ?? null,
+      auto_dim_delay: d.auto_dim_delay ?? null,
+    };
+    this.set({ latest, config, relayOk: true });
   }
 
   private teardownSubs() {

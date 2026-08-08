@@ -10,7 +10,8 @@ import {
   Dimensions,
   Animated,
 } from 'react-native';
-import Slider from '@react-native-community/slider'; // Fallback to custom slider if needed, but standard in RN. Let's make a custom pressable-slider or use standard View-based sliders so we don't need external packages!
+// No external slider package (it isn't installed and would need a native rebuild).
+// A lightweight TouchSlider using RN's built-in responder system is defined below.
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, radius } from '../theme';
@@ -77,6 +78,64 @@ function Icon({ name, color = colors.textMuted, size = 20 }: { name: string; col
       {name === 'refresh' && (
         <Text style={{ color, fontSize: 16 }}>↻</Text>
       )}
+    </View>
+  );
+}
+
+// Lightweight slider with NO native dependency — uses RN's built-in touch
+// responder. Drop-in replacement for @react-native-community/slider's basics.
+function TouchSlider({
+  min,
+  max,
+  step,
+  value,
+  onChange,
+}: {
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  const [width, setWidth] = useState(0);
+  const pct = Math.max(0, Math.min(1, (value - min) / (max - min)));
+  const handle = (x: number) => {
+    if (width <= 0) return;
+    const ratio = Math.max(0, Math.min(1, x / width));
+    let v = min + ratio * (max - min);
+    v = Math.round(v / step) * step;
+    onChange(Math.max(min, Math.min(max, v)));
+  };
+  return (
+    <View
+      onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
+      onStartShouldSetResponder={() => true}
+      onMoveShouldSetResponder={() => true}
+      onResponderGrant={(e) => handle(e.nativeEvent.locationX)}
+      onResponderMove={(e) => handle(e.nativeEvent.locationX)}
+      style={{ height: 32, justifyContent: 'center' }}
+    >
+      <View style={{ height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.1)' }}>
+        <View
+          style={{
+            height: 6,
+            borderRadius: 3,
+            width: `${pct * 100}%`,
+            backgroundColor: colors.amber,
+          }}
+        />
+      </View>
+      <View
+        style={{
+          position: 'absolute',
+          left: `${pct * 100}%`,
+          marginLeft: -11,
+          width: 22,
+          height: 22,
+          borderRadius: 11,
+          backgroundColor: colors.amber,
+        }}
+      />
     </View>
   );
 }
@@ -190,10 +249,10 @@ export function DashboardScreen({ navigation }: Props) {
     return 'Bright / Day';
   };
 
-  const liveBrightness = snap.telemetry?.ledBrightness ?? 0;
+  const liveBrightness = snap.latest?.ledBrightness ?? 0;
   const brightnessPercent = Math.round((liveBrightness / 255) * 100);
-  const liveLdr = snap.telemetry?.lightLevel ?? 420;
-  const liveMotion = snap.telemetry?.motionDetected ?? false;
+  const liveLdr = snap.latest?.lightLevel ?? 420;
+  const liveMotion = snap.latest?.motionDetected ?? false;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
@@ -214,7 +273,7 @@ export function DashboardScreen({ navigation }: Props) {
         <View>
           <Text style={styles.headerTitle}>Dashboard</Text>
           <Text style={styles.headerSubtitle}>
-            {snap.connection === 'connected' ? 'Connected to HC-05' : 'Searching for device...'}
+            {snap.connection === 'connected' ? (snap.deviceName ?? 'Connected') : 'Connecting…'}
           </Text>
         </View>
 
@@ -402,16 +461,7 @@ export function DashboardScreen({ navigation }: Props) {
 
               {/* View-based custom slider so no external library is needed */}
               <View style={styles.sliderTrackContainer}>
-                <Slider
-                  minimumValue={0}
-                  maximumValue={1023}
-                  step={1}
-                  value={ldrVal}
-                  onValueChange={(val) => setLdrVal(Math.round(val))}
-                  minimumTrackTintColor={colors.amber}
-                  maximumTrackTintColor="rgba(255,255,255,0.1)"
-                  thumbTintColor={colors.amber}
-                />
+                <TouchSlider min={0} max={1023} step={1} value={ldrVal} onChange={setLdrVal} />
               </View>
 
               <View style={styles.sliderLimits}>
@@ -431,16 +481,7 @@ export function DashboardScreen({ navigation }: Props) {
               </View>
 
               <View style={styles.sliderTrackContainer}>
-                <Slider
-                  minimumValue={5}
-                  maximumValue={300}
-                  step={5}
-                  value={pirTimeout}
-                  onValueChange={(val) => setPirTimeout(Math.round(val))}
-                  minimumTrackTintColor={colors.amber}
-                  maximumTrackTintColor="rgba(255,255,255,0.1)"
-                  thumbTintColor={colors.amber}
-                />
+                <TouchSlider min={5} max={300} step={5} value={pirTimeout} onChange={setPirTimeout} />
               </View>
 
               <View style={styles.sliderLimits}>

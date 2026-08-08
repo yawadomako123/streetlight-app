@@ -15,6 +15,14 @@ export const API_URL =
 // dashboard/database expect (default matches the USB bridge default).
 export const DEVICE_ID = process.env.EXPO_PUBLIC_DEVICE_ID ?? 'arduino-uno';
 
+// How the app gets its data:
+//   'backend'   → read telemetry from the Express backend over WiFi/internet
+//                 (used with the ESP32, which posts straight to the backend).
+//   'bluetooth' → connect directly to an HC-05 module over Bluetooth Classic.
+// Default is 'backend' now that the ESP32 handles its own WiFi uplink.
+export const CONNECTION_MODE: 'backend' | 'bluetooth' =
+  (process.env.EXPO_PUBLIC_CONNECTION_MODE as 'backend' | 'bluetooth') ?? 'backend';
+
 // When true, use the in-memory MockTransport instead of real Bluetooth.
 // Lets you run the whole UI in Expo Go / an emulator with no hardware.
 export const USE_MOCK_BT =
