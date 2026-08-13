@@ -3,6 +3,7 @@ import {
   LayoutGrid, Lightbulb, SlidersHorizontal, Power, Clock,
   Radio, BarChart3, Zap, Check, Sun, Eye,
 } from 'lucide-react';
+import { pushSupported, isPushEnabled, enablePush, disablePush } from '../push';
 
 interface DashboardProps {
   onLogout: () => void;
@@ -21,6 +22,9 @@ export default function Dashboard({ onLogout }: DashboardProps) {
   const [settings, setSettings] = useState({ ldrThreshold: 150, pirTimeout: 30, globalOverride: false });
   const [toast, setToast] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [pushOn, setPushOn] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const canPush = pushSupported();
 
   const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
@@ -100,6 +104,23 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       showToast('Settings saved');
     } catch { showToast('Save failed'); }
     finally { setSaving(false); }
+  };
+
+  // Security notifications (web push).
+  useEffect(() => { isPushEnabled().then(setPushOn).catch(() => {}); }, []);
+
+  const togglePush = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) { showToast('Sign in first'); return; }
+    setPushBusy(true);
+    try {
+      if (pushOn) { await disablePush(token); setPushOn(false); showToast('Notifications off'); }
+      else { await enablePush(token); setPushOn(true); showToast('Notifications on'); }
+    } catch (e: any) {
+      showToast(e?.message || 'Could not enable notifications');
+    } finally {
+      setPushBusy(false);
+    }
   };
 
   const tabs = [
@@ -285,6 +306,25 @@ export default function Dashboard({ onLogout }: DashboardProps) {
         {/* ── SETTINGS ── */}
         {activeTab === 'settings' && (
           <div className="space-y-4 mt-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+            {/* Security notifications */}
+            <div className="bg-night-end border border-amber-glow/20 rounded-2xl p-5 flex items-center justify-between">
+              <div className="pr-4">
+                <h3 className="text-white font-space font-semibold mb-1">🔔 Security notifications</h3>
+                <p className="text-gray-400 text-xs font-inter">
+                  {canPush
+                    ? 'Get a push alert for motion and if the light goes offline — even when the app is closed.'
+                    : 'Not supported here. On iPhone, install the app to your Home Screen first (Share → Add to Home Screen).'}
+                </p>
+              </div>
+              <button
+                onClick={togglePush}
+                disabled={!canPush || pushBusy}
+                className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors disabled:opacity-50 ${pushOn ? 'bg-amber-glow' : 'bg-gray-600'}`}
+              >
+                <span className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${pushOn ? 'translate-x-7' : 'translate-x-1'}`} />
+              </button>
+            </div>
+
             {/* LDR */}
             <div className="bg-night-end border border-white/5 rounded-2xl p-5">
               <div className="flex items-center justify-between mb-3">
