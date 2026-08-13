@@ -1,4 +1,5 @@
 import pool from '../db/pool.js';
+import { notifyMotion } from '../push/notifier.js';
 
 // Get all devices
 export const getDevices = async (req, res) => {
@@ -66,6 +67,9 @@ export const postTelemetry = async (req, res) => {
       `📥 ${new Date().toLocaleTimeString()}  telemetry ${deviceId}  ` +
       `ldr:${lightLevel} motion:${motionDetected ? 1 : 0} led:${ledBrightness}  | db ${dbMs}ms`
     );
+
+    // Fire a push if motion just started (debounced inside). Never blocks.
+    notifyMotion(deviceId, Boolean(motionDetected));
   } catch (error) {
     console.error('Error posting telemetry:', error);
     if (!res.headersSent) res.status(500).json({ error: 'Failed to process telemetry' });

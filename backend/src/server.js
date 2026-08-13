@@ -7,6 +7,9 @@ import authRoutes from './routes/auth.routes.js';
 import statsRoutes from './routes/stats.routes.js';
 import deviceRoutes from './routes/device.routes.js';
 import settingsRoutes from './routes/settings.routes.js';
+import pushRoutes from './routes/push.routes.js';
+import { ensurePushTable } from './push/notifier.js';
+import { startOfflineWatcher } from './push/offlineWatcher.js';
 import { notFound, errorHandler } from './middleware/errorHandler.js';
 
 dotenv.config();
@@ -36,11 +39,19 @@ app.use('/api/auth', authRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/push', pushRoutes);
 
 app.use(notFound);
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`Street lighting backend listening on port ${PORT}`);
+  // Ensure the push table exists, then start watching for offline devices.
+  try {
+    await ensurePushTable();
+    startOfflineWatcher();
+  } catch (e) {
+    console.error('Push init failed:', e.message);
+  }
 });
