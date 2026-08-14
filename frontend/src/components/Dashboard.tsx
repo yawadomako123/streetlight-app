@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   LayoutGrid, Lightbulb, SlidersHorizontal, Power, Clock,
   Radio, BarChart3, Zap, Check, Sun, Eye,
@@ -25,6 +25,9 @@ export default function Dashboard({ onLogout }: DashboardProps) {
   const [pushOn, setPushOn] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   const canPush = pushSupported();
+  const [dimPct, setDimPct] = useState<Record<string, number>>({});
+  const [listening, setListening] = useState(false);
+  const dimTimers = useRef<Record<string, any>>({});
 
   const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:4000';
 
@@ -58,7 +61,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const applyOverride = async (deviceId: string, enable: boolean, pct = 100) => {
+  const applyOverride = async (deviceId: string, enable: boolean, pct = 100, silent = false) => {
     if (userRole !== 'admin') { showToast('Admin only'); return; }
     const token = localStorage.getItem('token');
     const pwm = Math.round((pct / 100) * 255);
@@ -68,7 +71,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ manual_override: enable, target_brightness: enable ? pwm : null }),
       });
-      showToast(enable ? 'Manual override ON' : 'Back to auto');
+      if (!silent) showToast(enable ? 'Manual override ON' : 'Back to auto');
       fetchDashboardData();
     } catch { showToast('Action failed'); }
   };
@@ -120,6 +123,65 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       showToast(e?.message || 'Could not enable notifications');
     } finally {
       setPushBusy(false);
+    }
+  };
+
+  // ── Live dimmer helpers ───────────────────────────────────────────────────
+  const setDim = (id: string, pct: number) => setDimPct((p) => ({ ...p, [id]: pct }));
+  const clearDim = (id: string) => setDimPct((p) => { const n = { ...p }; delete n[id]; return n; });
+  const dimValFor = (d: any) => dimPct[d.id] ?? Math.round(((d.current_brightness || 0) / 255) * 100);
+
+  // Update the slider instantly; debounce the network call so we don't spam it.
+  const onDimChange = (id: string, pct: number) => {
+    setDim(id, pct);
+    clearTimeout(dimTimers.current[id]);
+    dimTimers.current[id] = setTimeout(() => applyOverride(id, true, pct, true), 350);
+  };
+
+  const modeBtn = (active: boolean) =>
+    `py-2.5 rounded-xl text-sm font-semibold transition-all ${active ? 'bg-amber-glow text-night-start' : 'bg-white/5 border border-white/10 text-white hover:bg-white/10'}`;
+
+  // ── Voice control (Web Speech API) ────────────────────────────────────────
+  const applyVoiceCommand = (transcript: string) => {
+    const t = transcript.toLowerCase();
+    const id = devices[0]?.id || 'arduino-uno';
+    const num = t.match(/(\d{1,3})/);
+    if (/auto|automatic|sensor/.test(t)) { clearDim(id); applyOverride(id, false, 100, true); showToast(`🎙️ "${transcript}" → Auto`); return; }
+    if (/off|dark/.test(t)) { setDim(id, 0); applyOverride(id, true, 0, true); showToast(`🎙️ "${transcript}" → Off`); return; }
+    if (num && /(dim|bright|set|level|percent|%|to)/.test(t)) {
+      const p = Math.max(0, Math.min(100, parseInt(num[1], 10)));
+      setDim(id, p); applyOverride(id, true, p, true); showToast(`🎙️ "${transcript}" → ${p}%`); return;
+    }
+    if (/full|max|hundred/.test(t)) { setDim(id, 100); applyOverride(id, true, 100, true); showToast(`🎙️ "${transcript}" → Full`); return; }
+    if (/half/.test(t)) { setDim(id, 50); applyOverride(id, true, 50, true); showToast(`🎙️ "${transcript}" → 50%`); return; }
+    if (/\bon\b|light/.test(t)) { setDim(id, 100); applyOverride(id, true, 100, true); showToast(`🎙️ "${transcript}" → On`); return; }
+    showToast(`🎙️ Didn't catch: "${transcript}"`);
+  };
+
+  const startVoice = () => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) { showToast('Voice needs Chrome or Edge'); return; }
+    const rec = new SR();
+    rec.lang = 'en-US';
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+    setListening(true);
+    rec.onresult = (e: any) => applyVoiceCommand(e.results[0][0].transcript);
+    rec.onerror = () => { setListening(false); showToast('Didn’t hear anything'); };
+    rec.onend = () => setListening(false);
+    rec.start();
+  };
+
+  const sendTestPush = async () => {
+    const token = localStorage.getItem('token');
+    try {
+      const res = await fetch(`${apiUrl}/api/push/test`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      showToast(res.ok ? 'Test alert sent 🔔' : 'Test failed');
+    } catch {
+      showToast('Test failed');
     }
   };
 
@@ -281,19 +343,40 @@ export default function Dashboard({ onLogout }: DashboardProps) {
                     </div>
                   </div>
 
-                  {/* Override control (admin) */}
+                  {/* Control panel (admin) — Auto / Off / On + live dimmer */}
                   {userRole === 'admin' ? (
-                    <button
-                      onClick={() => applyOverride(d.id, !d.manual_override, 100)}
-                      disabled={!isOnline}
-                      className={`w-full py-3 rounded-xl font-inter text-sm font-semibold transition-all disabled:opacity-40 ${
-                        d.manual_override
-                          ? 'bg-amber-glow text-night-start'
-                          : 'bg-white/5 border border-white/10 text-white hover:bg-white/10'
-                      }`}
-                    >
-                      {d.manual_override ? 'Turn OFF override (back to auto)' : 'Force full brightness'}
-                    </button>
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          onClick={() => { clearDim(d.id); applyOverride(d.id, false, 100, true); showToast('Auto mode'); }}
+                          disabled={!isOnline}
+                          className={`${modeBtn(!d.manual_override)} disabled:opacity-40`}
+                        >Auto</button>
+                        <button
+                          onClick={() => { setDim(d.id, 0); applyOverride(d.id, true, 0, true); showToast('Lights off'); }}
+                          disabled={!isOnline}
+                          className={`${modeBtn(d.manual_override && (d.current_brightness || 0) === 0)} disabled:opacity-40`}
+                        >Off</button>
+                        <button
+                          onClick={() => { setDim(d.id, 100); applyOverride(d.id, true, 100, true); showToast('Lights on'); }}
+                          disabled={!isOnline}
+                          className={`${modeBtn(d.manual_override && (d.current_brightness || 0) >= 250)} disabled:opacity-40`}
+                        >On</button>
+                      </div>
+
+                      <div className="bg-night-start/50 rounded-xl p-3">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-gray-400 text-xs font-inter">Dimmer</span>
+                          <span className="text-amber-glow text-sm font-bold">{dimValFor(d)}%</span>
+                        </div>
+                        <input
+                          type="range" min={0} max={100} value={dimValFor(d)}
+                          onChange={(e) => onDimChange(d.id, parseInt(e.target.value))}
+                          disabled={!isOnline}
+                          className="w-full accent-amber-glow disabled:opacity-40"
+                        />
+                      </div>
+                    </div>
                   ) : (
                     <div className="text-center text-xs text-gray-600 font-inter">Admin role required to control</div>
                   )}
@@ -307,22 +390,32 @@ export default function Dashboard({ onLogout }: DashboardProps) {
         {activeTab === 'settings' && (
           <div className="space-y-4 mt-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
             {/* Security notifications */}
-            <div className="bg-night-end border border-amber-glow/20 rounded-2xl p-5 flex items-center justify-between">
-              <div className="pr-4">
-                <h3 className="text-white font-space font-semibold mb-1">🔔 Security notifications</h3>
-                <p className="text-gray-400 text-xs font-inter">
-                  {canPush
-                    ? 'Get a push alert for motion and if the light goes offline — even when the app is closed.'
-                    : 'Not supported here. On iPhone, install the app to your Home Screen first (Share → Add to Home Screen).'}
-                </p>
+            <div className="bg-night-end border border-amber-glow/20 rounded-2xl p-5">
+              <div className="flex items-center justify-between">
+                <div className="pr-4">
+                  <h3 className="text-white font-space font-semibold mb-1">🔔 Security notifications</h3>
+                  <p className="text-gray-400 text-xs font-inter">
+                    {canPush
+                      ? 'Get a push alert for motion and if the light goes offline — even when the app is closed.'
+                      : 'Not supported here. On iPhone, install the app to your Home Screen first (Share → Add to Home Screen).'}
+                  </p>
+                </div>
+                <button
+                  onClick={togglePush}
+                  disabled={!canPush || pushBusy}
+                  className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors disabled:opacity-50 ${pushOn ? 'bg-amber-glow' : 'bg-gray-600'}`}
+                >
+                  <span className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${pushOn ? 'translate-x-7' : 'translate-x-1'}`} />
+                </button>
               </div>
-              <button
-                onClick={togglePush}
-                disabled={!canPush || pushBusy}
-                className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors disabled:opacity-50 ${pushOn ? 'bg-amber-glow' : 'bg-gray-600'}`}
-              >
-                <span className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${pushOn ? 'translate-x-7' : 'translate-x-1'}`} />
-              </button>
+              {pushOn && (
+                <button
+                  onClick={sendTestPush}
+                  className="mt-4 w-full py-2.5 rounded-xl bg-white/5 border border-white/10 text-white text-sm font-inter hover:bg-white/10 transition-colors"
+                >
+                  Send test alert
+                </button>
+              )}
             </div>
 
             {/* LDR */}
@@ -385,6 +478,17 @@ export default function Dashboard({ onLogout }: DashboardProps) {
           </div>
         )}
       </div>
+
+      {/* Voice control mic (admin) */}
+      {userRole === 'admin' && (
+        <button
+          onClick={startVoice}
+          title='Voice control — try "turn on", "dim to 30", "auto"'
+          className={`fixed bottom-28 right-6 z-40 w-14 h-14 rounded-full flex items-center justify-center shadow-2xl transition-all ${listening ? 'bg-red-500 animate-pulse scale-110' : 'bg-amber-glow'}`}
+        >
+          <span className="text-xl">🎤</span>
+        </button>
+      )}
 
       {/* Floating pill tab bar */}
       <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-[min(92%,26rem)]">

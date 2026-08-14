@@ -1,4 +1,4 @@
-import { saveSubscription, removeSubscription, vapidPublicKey } from '../push/notifier.js';
+import { saveSubscription, removeSubscription, vapidPublicKey, sendPushToAll } from '../push/notifier.js';
 
 // Public VAPID key the browser needs to create a subscription. Not secret.
 export const getVapidPublicKey = (req, res) => {
@@ -12,6 +12,21 @@ export const subscribe = async (req, res) => {
     res.json({ success: true });
   } catch (e) {
     res.status(400).json({ error: e.message || 'Invalid subscription' });
+  }
+};
+
+// Send a test notification to every subscribed device (for demos / verifying setup).
+export const sendTest = async (req, res) => {
+  try {
+    await sendPushToAll({
+      title: '✅ Test alert',
+      body: 'Your street light notifications are working!',
+      tag: 'test',
+      url: '/dashboard',
+    });
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to send test notification' });
   }
 };
 
